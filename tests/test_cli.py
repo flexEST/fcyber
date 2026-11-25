@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -51,6 +52,69 @@ class ToolkitTests(unittest.TestCase):
             self.assertEqual(report["content-security-policy"], [])
             file.write_text("malformed")
             self.assertEqual(self.run_cli("headers", file).returncode, 1)
+
+
+    def test_inventory_tracks_changes_and_skips_symlinks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "files"
+            root.mkdir()
+            manifest = root.parent / "manifest.json"
+            (root / "changed").write_text("before")
+            (root / "removed").touch()
+            (root / "link").symlink_to(manifest)
+            created = self.run_cli("inventory", "create", root, manifest)
+            self.assertEqual(created.returncode, 0, created.stderr)
+            self.assertEqual(set(json.loads(manifest.read_text())["files"]), {"changed", "removed"})
+            self.assertEqual(self.run_cli("inventory", "verify", root, manifest).returncode, 0)
+            self.assertEqual(self.run_cli("inventory", "create", root, manifest).returncode, 1)
+            (root / "changed").write_text("after")
+            (root / "removed").unlink()
+            (root / "added").touch()
+            result = self.run_cli("inventory", "verify", root, manifest)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout), {
+                "added": ["added"], "removed": ["removed"], "changed": ["changed"],
+            })
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux socket tables required")
+    def test_bindings_detects_local_listener(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            result = self.run_cli("bindings")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(any(
+                item["address"] == "127.0.0.1" and item["port"] == port
+                for item in json.loads(result.stdout)
+            ))
+            filtered = self.run_cli("bindings", "--non-loopback")
+            self.assertEqual(filtered.returncode, 0, filtered.stderr)
+            self.assertFalse(any(item["address"] == "127.0.0.1" for item in json.loads(filtered.stdout)))
+
+    def test_resolve_local_address(self):
+        result = self.run_cli("resolve", "127.0.0.1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["ipv4"], ["127.0.0.1"])
+
+    def test_log_summary_handles_errors_without_printing_messages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "logs.jsonl"
+            records = [
+                {"level": "warn", "message": "private content"},
+                {"level": "error"},
+                {"level": None},
+            ]
+            file.write_text("\n".join(map(json.dumps, records)))
+            result = self.run_cli("log-summary", file, "--fail-on-error")
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(json.loads(result.stdout), {
+                "records": 3, "levels": {"WARNING": 1, "ERROR": 1, "UNKNOWN": 1},
+            })
+            file.write_text("{}\ninvalid")
+            malformed = self.run_cli("log-summary", file)
+            self.assertEqual(malformed.returncode, 1)
+            self.assertIn("line 2", malformed.stderr)
 
 
 if __name__ == "__main__":

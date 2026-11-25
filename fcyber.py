@@ -10,6 +10,8 @@ import string
 import sys
 from pathlib import Path
 
+from fcyber_tools import integrity, logs, network
+
 
 SECURITY_HEADERS = (
     "content-security-policy",
@@ -48,9 +50,30 @@ def main(argv=None):
     digest.add_argument("--expect", help="Expected SHA-256 digest")
     headers = commands.add_parser("headers", help="Review headers from a saved HTTP response")
     headers.add_argument("file", type=Path)
+    inventory = commands.add_parser("inventory", help="Capture or verify a directory inventory")
+    inventory.add_argument("action", choices=("create", "verify"))
+    inventory.add_argument("directory", type=Path)
+    inventory.add_argument("manifest", type=Path)
+    inventory.set_defaults(handler=integrity.inventory)
+
+    bindings = commands.add_parser("bindings", help="List local Linux TCP listeners and UDP sockets")
+    bindings.add_argument("--non-loopback", action="store_true")
+    bindings.set_defaults(handler=network.bindings)
+
+    resolve = commands.add_parser("resolve", help="Look up IPv4 and IPv6 addresses for a hostname")
+    resolve.add_argument("host")
+    resolve.set_defaults(handler=network.resolve)
+
+    log_summary = commands.add_parser("log-summary", help="Count log levels in a saved JSONL file")
+    log_summary.add_argument("file", type=Path)
+    log_summary.add_argument("--fail-on-error", action="store_true")
+    log_summary.set_defaults(handler=logs.summarize)
+
     args = parser.parse_args(argv)
 
     try:
+        if hasattr(args, "handler"):
+            return args.handler(args)
         if args.command == "system":
             print(json.dumps({
                 "os": platform.system(),
