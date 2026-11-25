@@ -1,6 +1,6 @@
 # fcyber
 
-A local defensive security toolkit maintained by **flexEST**. It was inspired by the toolkit format of [NIVOS](https://github.com/theahmadov/NIVOS) and implemented independently.
+
 
 ## Requirements
 
